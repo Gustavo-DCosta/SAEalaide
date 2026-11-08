@@ -6,8 +6,7 @@ from LCD import CharLCD
 
 S1 = Pin(13, Pin.IN, Pin.PULL_UP)   
 S2 = Pin(14, Pin.IN, Pin.PULL_UP)  
-S3 = Pin(15, Pin.IN, Pin.PULL_UP)   
-PIN_COMMANDE = 22                   
+S3 = Pin(15, Pin.IN, Pin.PULL_UP)                    
 
 lcd = CharLCD(rs=2, en=4, d4=7, d5=8, d6=9, d7=10, cols=16, rows=2)
 adc = ADC(Pin(27))                  # sonde CTN
@@ -20,55 +19,30 @@ A1 = 3.354016e-3
 B1 = 2.569850e-4
 C1 = 2.620131e-6
 D1 = 6.383091e-8
-# ----------------------------------------------------------------------
-# CONFIGURATION (sauvegardée en flash dans config.json)
-# ----------------------------------------------------------------------
-config = {
-    "mode": "chauffage",            # "chauffage" | "clim" | "sechoir"
-    "langue": "francais",           # "francais" | "anglais"
-    "offset": 0.0,                  # étalonnage en °C, ex : -2.5 à +2.5
-    "hysteresis": 0.4,              # °C, 0.0 à 2.0
-    "consigne": 20.0,               # °C, dépend du mode
-}
-
-
-def lecture():
-    """Recharge la config depuis la flash. Garde les valeurs par défaut sinon."""
-    try:
-        with open("config.json") as f:
-            config.update(json.load(f))
-    except (OSError, ValueError):
-        print("Pas de sauvegarde, valeurs par défaut")
-
-
-def sauvegarde(changement):
-    """
-    Un seul argument : un dictionnaire avec la rubrique et sa valeur.
-    Exemples : sauvegarde({"offset": 0.3})
-               sauvegarde({"langue": "anglais"})
-    """
-    for cle in changement:
-        if cle not in config:
-            print("Rubrique inconnue :", cle)
-            return
-    config.update(changement)
-    with open("config.json", "w") as f:
-        json.dump(config, f)
+HEURES = 0
+MINUTES = 0
 
 
 # ----------------------------------------------------------------------
-# OUTILS
+# Juste des trucs pour que je me dépe=éche dans le code
+# Je fesais ça en C++ avec l'API d'arduino au lieu de faire des test plus longs et écrire plusieurs trucs
 # ----------------------------------------------------------------------
+def flecheLCD(col, ligne):
+    lcd.set_cursor(col, ligne)
+    lcd.message("->")
+    sleep_ms(150)
+    lcd.set_cursor(col, ligne)
+    lcd.message("  ")
+    sleep_ms(150)
+
 def pressed(pin):
     """ça renvoie un true/false dépédamment de l'état du pin
     j'utilisais ça en C++ avec l'api d'arduino donc je me suis dit que je pouvais sauver des lignes et du temps avec ce truc"""
     return pin.value() == 0
 
 
-def borner(valeur, mini, maxi):
-    """Force valeur à rester entre mini et maxi."""
-    return max(mini, min(maxi, valeur))
 
+# Les fonctions voilà normales qui font partie du code
 def choixLangage() {
         if pressed(S1):
             print("Choisis le français comme langue")
@@ -78,66 +52,132 @@ def choixLangage() {
             print("français comme défault")
 }
 
-def lire_temperature():
-    """Température en °C (offset inclus), ou None si le capteur est en défaut."""
-    total = 0
-    for _ in range(NB_MOYENNES):
-        total += adc.read_u16()
-    v = (total / NB_MOYENNES) * VCC / 65535
-    if v <= 0.01 or v >= VCC - 0.01:    # capteur débranché ou court-circuité
-        return None
-    r = R1 * (VCC - v) / v              # résistance de la CTN (pont diviseur)
-    l = log(r / RREF)
-    tk = 1 / (A1 + B1 * l + C1 * l * l + D1 * l * l * l)   # Steinhart-Hart
-    return tk - 273.15 + config["offset"]
+def choixHoraire():
+    heure = 0
+    minute = 0
 
+    # --- Heures : S1 augmente, S3 valide ---
+    lcd.clear()
+    lcd.message("Heure :")
+    while not pressed(S3):
+        lcd.set_cursor(0, 1)
+        # lcd.message("{:02d}".format(heure)) nous permet d'ajouter un 0 devant le chifre s'il est < 10
+        # https://stackoverflow.com/questions/3377688/what-do-these-symbolic-strings-mean-02d-01d
+        lcd.message("{:02d}".format(heure))
+        if pressed(S1):
+            heure += 1
+            if heure == 24:
+                heure = 0
+            sleep_ms(200)
+    sleep(3)                    # j'utilise un sleep de 3 secondes comme ça on a le temps de relacher le button
 
-def regule(temp, consigne, hysteresis, etat, mode):
-    """
-    Retourne True si la commande doit être active.
-    Dans la zone morte (consigne +/- hysteresis/2), on garde l'état précédent.
-    """
-    demi = hysteresis / 2
-    if mode == "clim":                  # la clim refroidit : logique inversée
-        if temp > consigne + demi:
-            return True
-        if temp < consigne - demi:
-            return False
-    else:                               # chauffage ou séchoir
-        if temp < consigne - demi:
-            return True
-        if temp > consigne + demi:
-            return False
-    return etat
+   # ici ducoup S1 += 1, s3 = valider (mode heure)
+    # et donc on rajoute S2 -= 1 pour les minutes et les autres buttons gardent la meme chose 
+    lcd.clear()
+    lcd.message("Minutes :")
+    while not pressed(S3):
+        lcd.set_cursor(0, 1)
+        # lcd.message("{:02d}".format(heure)) nous permet d'ajouter un 0 devant le chifre s'il est < 10
+        # https://stackoverflow.com/questions/3377688/what-do-these-symbolic-strings-mean-02d-01d
+        lcd.message("{:02d}".format(minute))
+        if pressed(S1):
+            minute += 1
+            if minute == 60:
+                minute = 0
+            sleep_ms(200)
+        if pressed(S2):
+            minute -= 1
+            if minute < 0:
+                minute = 59
+            sleep_ms(200)
+    sleep_ms(300)
 
-
-def regler_heure(heure, minute):
-    """À appeler une fois depuis Thonny, ex : regler_heure(14, 5)."""
     RTC().datetime((2026, 1, 1, 0, heure, minute, 0, 0))
-
-
-def afficher(temp, etat):
-    """Écran principal : température réelle, heure, consigne, état de la commande."""
-    h, m = RTC().datetime()[4:6]
-    lcd.set_cursor(0, 0)
-    if temp is None:
-        lcd.message("{:<16}".format("Err capteur"))
-    else:
-        lcd.message("Temp {:4.1f}C {:02d}:{:02d}".format(temp, h, m))
-    lcd.set_cursor(0, 1)
-    lcd.message("Cons {:4.1f}C {:>5}".format(config["consigne"], "ON" if etat else "OFF"))
+    lcd.clear()
 
 
 # ----------------------------------------------------------------------
-# MENUS TECHNICIENS (à reprendre à l'étape suivante)
+# Les menus suivants sont ducoup les menus des techniciens
 # ----------------------------------------------------------------------
 def modeSAV():
-    print("TODO : menu SAV (étalonnage)")
+    offset = config["offset"]
+    print("MODE SAV")
+
+    def show():
+        lcd.set_cursor(0, 0)
+        lcd.message("{:<16}".format("{:+.1f}".format(offset)))
+
+    lcd.clear()
+    show()
+    lcd.set_cursor(0, 1)
+    lcd.message("+")
+    lcd.set_cursor(8, 1)
+    lcd.message("-")
+    lcd.set_cursor(14, 1)
+    lcd.message("OK")
+
+    dernier_s3 = -10000
+
+    while True:
+        if pressed(S1):
+            offset = round(offset + 0.1, 1)
+            show()
+            sleep_ms(200)
+
+        if pressed(S2):
+            offset = round(offset - 0.1, 1)
+            show()
+            sleep_ms(200)
+
+        if pressed(S3):
+            maintenant = ticks_ms()
+            # 2 appuis sur S3 en moins d'1 seconde = on valide
+            if ticks_diff(maintenant, dernier_s3) < 1000:
+                sauvegarde({"offset": offset})
+                print(offset)
+                lcd.clear()
+                return
+            dernier_s3 = maintenant
+            sleep_ms(250)
+
+        sleep_ms(50)
 
 
 def modeInstallation():
-    print("TODO : menu installation (mode + hystérésis)")
+    # S1 = chauffage, S2 = clim, S3 = séchoir, puis S3 deux fois pour confirmer
+    lcd.clear()
+    lcd.set_cursor(3, 0)
+    lcd.message("Chauffage")
+    lcd.set_cursor(2, 1)
+    lcd.message("Clim")
+    lcd.set_cursor(9, 1)
+    lcd.message("sechoir")
 
+    choix = None
+    while choix is None:
+        if pressed(S1):
+            choix = "chauffage"
+            col, ligne = 1, 0
+        elif pressed(S2):
+            choix = "clim"
+            col, ligne = 0, 1
+        elif pressed(S3):
+            choix = "sechoir"
+            col, ligne = 7, 1
+        sleep_ms(20)
+    sleep_ms(400)                       # le temps de relâcher le bouton
+
+    dernier_s3 = -10000
+    while True:
+        flecheLCD(col, ligne)           # la flèche clignote sur le mode choisi
+        if pressed(S3):
+            maintenant = ticks_ms()
+            if ticks_diff(maintenant, dernier_s3) < 1000:
+                sauvegarde({"mode": choix})
+                lcd.clear()
+                return choix
+            dernier_s3 = maintenant
+            sleep_ms(250)
 
 # ----------------------------------------------------------------------
 # PROGRAMME PRINCIPAL
